@@ -1,3 +1,7 @@
+.vs/
+int/
+bin/
+
 # Prerequisites
 *.d
 
