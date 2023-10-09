@@ -7,8 +7,12 @@ Can be compiled as a static or dynamic library (define AC_DLL in api.h).
 Both x86 and x64 are supported.
 
 ## usage
-Compile, link against the library and call `AC_Initialize` on program startup.
+Compile as a .lib, link against it and call `AC_Initialize` on program startup.
 All other calls are optional and documented in api.h.
+
+For testing, start target.exe in Debug mode. Once the anticheat has initialized,
+it will load cheat.dll. The cheat will hook `SampleFunction` and `MessageBoxA`,
+which should be detected on the second scan.
 
 ## notes
 This is a research/educational project. It is most likely incompatible with

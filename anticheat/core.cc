@@ -1215,12 +1215,13 @@ CollectIpAddresses(std::vector<AC_IpAddress*>& ipv4_vec, std::vector<AC_IpAddres
         free(adapter_addresses);
 }
 
+// Not very accurate, should be combined with other info
 INTERNAL AC_Hwid
 GenerateHardwareId()
 {
     AC_Hwid id{};
 
-    std::wstring value = GetRegistryString(HKEY_LOCAL_MACHINE, L"SYSTEM\\HardwareConfig\\Current", L"BaseBoardProduct");
+    auto value = GetRegistryString(HKEY_LOCAL_MACHINE, L"SYSTEM\\HardwareConfig\\Current", L"SystemProductName");
     if (!value.empty())
         id = Hash(value);
 

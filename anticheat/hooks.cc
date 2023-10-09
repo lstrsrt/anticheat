@@ -75,12 +75,6 @@ PreCreateThread(PVOID start_address)
     return true;
 }
 
-INTERNAL void NTAPI
-OnThreadCreateApc(ULONG_PTR)
-{
-    // TODO
-}
-
 INTERNAL void
 PostCreateThread(HANDLE thread, PVOID parameter, PVOID start_address, bool suspended)
 {
@@ -90,9 +84,6 @@ PostCreateThread(HANDLE thread, PVOID parameter, PVOID start_address, bool suspe
         LOG_INFO("Suspended thread {} was created. Start {}", tid, ( PVOID )start_address);
         PlaceThreadOnWatchlist(thread, parameter, tid, ( ULONG_PTR )start_address);
     }
-
-    QueueUserAPC(&OnThreadCreateApc, thread, 0);
-    NtTestAlert();
 }
 
 INTERNAL void
