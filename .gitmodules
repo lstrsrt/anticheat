@@ -1,0 +1,3 @@
+[submodule "shared/phnt"]
+	path = shared/phnt
+	url = https://github.com/winsiderss/phnt.git
