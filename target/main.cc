@@ -41,6 +41,9 @@ main()
     AC_SetBaseTimeout(9000);
 
     AC_Initialize();
+#ifdef AC_DRIVER
+    AC_LoadDriver();
+#endif
 
     const AC_Client* client = AC_GetClient();
     // wprintf(L"%s\n", client->m_computer_name);
@@ -55,10 +58,15 @@ main()
     MessageBoxA(NULL, "Test", "Hello", MB_OK);
 
     if (AC_Confirm() != AC_RSuccess)
+    {
+#ifdef AC_DRIVER
+        AC_UnloadDriver();
+#endif
         return 1;
+    }
 
-    // int i = 10;
-    while (1) // (i--)
+    int i = 10;
+    while (i--)
     {
         SampleFunction(12345);
         Sleep(1000);

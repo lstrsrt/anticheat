@@ -106,7 +106,7 @@ typedef void(*AC_DetectionCallback)(AC_DetectionType, const AC_Client*);
 *        kernel32.dll
 *        the module that called AC_Initialize
 *
-* Return values
+* Returns
 *    AC_RSuccess       - Success.
 *    AC_RInvalidParam1 - Invalid message address.
 *    AC_RInvalidCall   - Function was called more than once.
@@ -118,12 +118,13 @@ AC_Initialize();
 #ifdef _DEBUG
 /*
 * AC_End
-*    Resets internal structures and terminates protection threads.
+*    Resets internal structures, terminates protection threads and
+*    unloads driver if necessary.
 *    Afterwards, calling AC_Initialize is allowed again.
 *
 *    This function is meant for testing and is not exported in Release mode.
 *
-* Return values
+* Returns
 *    AC_RSuccess       - Success.
 *    AC_RInvalidCall   - Function was called more than once.
 */
@@ -141,7 +142,7 @@ AC_End();
 *    name - Null-terminated module name (length must be shorter than MAX_PATH).
 *           Passing NULL protects the calling module.
 *
-* Return values
+* Returns
 *    AC_RSuccess       - Success.
 *    AC_RInvalidParam1 - Invalid name.
 *    AC_RInvalidCall   - Function was called more than once for the same module
@@ -158,7 +159,7 @@ AC_ProtectModule(const wchar_t* name);
 * Parameters
 *    name - Null-terminated module name (length must be shorter than MAX_PATH).
 *
-* Return values
+* Returns
 *    AC_RSuccess       - Success.
 *    AC_RInvalidParam1 - Invalid name.
 *    AC_RInvalidCall   - Function was called more than once for the same module.
@@ -176,18 +177,46 @@ AC_BlacklistModule(const wchar_t* name);
 * Parameters
 *    timeout - Timeout in ms. Passing 0 resets to the default value.
 *
-* Return values
+* Returns
 *    AC_RSuccess       - Success.
 *    AC_RInvalidParam1 - timeout is invalid (see above).
 */
 AC_API AC_Result
 AC_SetBaseTimeout(unsigned int timeout);
 
+#ifdef AC_DRIVER
+/*
+* AC_LoadDriver
+*    Loads the AC driver. The process has to be elevated.
+*    Can be called before or after AC_Initialize.
+*
+* Returns
+*    AC_RSuccess       - Success.
+*    AC_RInvalidCall   - Driver is already running.
+*    AC_RFailure       - Unspecified failure (see debug log).
+*/
+AC_API AC_Result
+AC_LoadDriver();
+
+/*
+* AC_UnloadDriver
+*    Unloads the AC driver. This is called by AC_End (in Debug mode).
+*    Call this on process exit or the driver will keep running and
+*    handles will leak!
+*
+* Returns
+*    AC_RSuccess       - Success.
+*    AC_RInvalidCall   - Driver is already stopped.
+*/
+AC_API AC_Result
+AC_UnloadDriver();
+#endif
+
 /*
 * AC_GetClient
 *    Retrieves information about the local client.
 *
-* Return values
+* Returns
 *    Pointer to constant AC_Client structure.
 */
 AC_API const AC_Client*
@@ -198,7 +227,7 @@ AC_GetClient();
 *     Confirms connection to the game.
 *     The return value of this function should always be checked.
 *
-* Return values
+* Returns
 *     AC_RSuccess      - Success.
 *     AC_RFailure      - An error occurred.
 */
@@ -212,7 +241,7 @@ AC_Confirm();
 * Parameters
 *    function - Address of the callback.
 *
-* Return values
+* Returns
 *    AC_RSuccess       - Success.
 *    AC_RInvalidParam1 - Invalid callback address.
 */
@@ -226,7 +255,7 @@ AC_RegisterInitCallback(AC_InitCallback function);
 * Parameters
 *    function - Address of the callback.
 *
-* Return values
+* Returns
 *    AC_RSuccess       - Success.
 *    AC_RInvalidParam1 - Invalid callback address.
 */
@@ -240,7 +269,7 @@ AC_RegisterHookCallback(AC_HookCallback function);
 * Parameters
 *    function - Address of the callback.
 *
-* Return values
+* Returns
 *    AC_RSuccess        - Success.
 *    AC_RInvalidParam1  - Invalid function address.
 */
@@ -254,7 +283,7 @@ AC_RegisterScanCallback(AC_ScanCallback function);
 * Parameters
 *    function - Address of the callback.
 *
-* Return values
+* Returns
 *    AC_RSuccess       - Success.
 *    AC_RInvalidParam1 - Invalid function address.
 */
@@ -268,7 +297,7 @@ AC_RegisterDetectionCallback(AC_DetectionCallback function);
 * Parameters
 *    result - Result code.
 *
-* Return values
+* Returns
 *    Null-terminated C string translation of the AC_Result code.
 *    If result is invalid or has no string associated with it,
 *    a placeholder string is returned instead.

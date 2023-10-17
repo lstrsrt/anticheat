@@ -7,7 +7,7 @@
 // Load driver from usermode (x64 only). Remember to call AC_End so it can be unloaded and
 // all handles are closed as appropriate!
 // Note: if you don't have the WDK, you can disable compiling the driver in project settings
-#define AC_DRIVER
+// #define AC_DRIVER
 
 // Log as much as possible
 // Only has an effect in Debug configurations

@@ -28,21 +28,23 @@ using namespace std::chrono_literals;
 #include "logger.hh"
 #include "../shared/shared.h"
 
-#define MAYBE_UNUSED [[maybe_unused]]
-#define NORETURN [[noreturn]]
-#define INTERNAL static
+#pragma region utils
 
+#ifdef _RELEASE
+[[noreturn]]
+#endif
+inline void Unexpected()
+{
 #ifdef _DEBUG
-#define DEBUG_STR(x) TEXT(x)
+#ifdef _MSC_VER
+    __debugbreak();
 #else
-#define DEBUG_STR(x) TEXT("")
+    __builtin_debugtrap();
 #endif
-
-#ifdef AC_LOG_VERBOSE
-#define VERBOSE(x) (x)
 #else
-#define VERBOSE(x)
+    terminate();
 #endif
+}
 
 using Hash32 = AC_Hash32;
 
@@ -290,7 +292,7 @@ LogWindowsError(std::string_view msg, auto&&... args)
     LOG_ERROR(msg, std::forward<decltype(args)>(args)...);
 }
 #else
-#define LogWindowsError(...)
+#define LogWindowsError(...) EMPTY_STATEMENT
 #endif
 
 inline bool
@@ -300,6 +302,40 @@ CompareNtHeaders(IMAGE_NT_HEADERS* lhs, IMAGE_NT_HEADERS* rhs)
     // Instead, only check two fields that should be unique and are important to the OS.
     return lhs->OptionalHeader.AddressOfEntryPoint == rhs->OptionalHeader.AddressOfEntryPoint &&
         lhs->OptionalHeader.SizeOfCode == rhs->OptionalHeader.SizeOfCode;
+}
+
+struct Module;
+
+IMAGE_SECTION_HEADER* AddressToSection(PVOID address, PVOID base);
+std::optional<Module> AddressToModule(ULONG_PTR address);
+std::optional<std::wstring> AddressToModuleName(PVOID address);
+
+std::string GetSectionName(IMAGE_SECTION_HEADER* section);
+
+bool IsWithinTextSection(const Module& mod, PVOID address);
+bool IsWithinAnyTextSection(PVOID address);
+
+bool IsOwnThread(ULONG id);
+bool IsOwnThread(HANDLE handle);
+
+void
+WalkSections(IMAGE_NT_HEADERS* nt, const std::predicate<IMAGE_SECTION_HEADER*> auto&& function)
+{
+    auto section = IMAGE_FIRST_SECTION(nt);
+    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++)
+    {
+        if (!function(section))
+            return;
+        section++;
+    }
+}
+
+template<class F>
+inline PVOID
+FindFunction(PCSTR module_name, PCSTR function_name, F& function)
+{
+    function = ( F )DetourFindFunction(module_name, function_name);
+    return ( PVOID )function;
 }
 
 struct AutoHandle
@@ -382,8 +418,6 @@ struct Import
     ULONG_PTR m_address{};
     ULONGLONG m_first8{};
 };
-
-std::string GetSectionName(IMAGE_SECTION_HEADER* section);
 
 struct Section
 {
@@ -470,33 +504,32 @@ struct ProtectedModule : Module
     std::vector<Import> m_old_iat{};
 };
 
-void WalkSections(IMAGE_NT_HEADERS* nt, const std::predicate<IMAGE_SECTION_HEADER*> auto&& function)
+struct Driver
 {
-    auto section = IMAGE_FIRST_SECTION(nt);
-    for (WORD i = 0; i < nt->FileHeader.NumberOfSections; i++)
+    std::wstring m_name{};
+    HANDLE m_handle{};
+    SC_HANDLE m_service{};
+
+    explicit Driver(std::wstring_view name)
+        : m_name(name)
     {
-        if (!function(section))
-            return;
-        section++;
+
     }
-}
 
-IMAGE_SECTION_HEADER* AddressToSection(PVOID address, PVOID base);
-std::optional<Module> AddressToModule(ULONG_PTR address);
-std::optional<std::wstring> AddressToModuleName(PVOID address);
+    AC_Result Load(const fs::path& driver_path, std::wstring_view display_name, std::wstring_view device);
+    AC_Result Unload();
 
-bool IsWithinTextSection(const Module& mod, PVOID address);
-bool IsWithinAnyTextSection(PVOID address);
+    template<class T>
+    bool Call(ULONG request, T* buffer, ULONG buffer_size = sizeof(T)) const
+    {
+        ULONG _;
+        return DeviceIoControl(m_handle, request, ( PVOID )buffer, buffer_size,
+            ( PVOID )buffer, buffer_size, &_, nullptr);
+    }
 
-#define PAGE_EXECUTE_MASK (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)
-
-template<class F>
-inline PVOID
-FindFunction(PCSTR module_name, PCSTR function_name, F& function)
-{
-    function = ( F )DetourFindFunction(module_name, function_name);
-    return ( PVOID )function;
-}
+    ULONG GetState() const; // SERVICE_*
+    void WaitOnState(ULONG state) const;
+};
 
 struct AC_Thread
 {
@@ -536,9 +569,6 @@ struct AC_Thread
     void(*m_function)(){};
 };
 
-bool IsOwnThread(ULONG id);
-bool IsOwnThread(HANDLE handle);
-
 struct AC_Ctrl
 {
     explicit AC_Ctrl() = default;
@@ -575,22 +605,6 @@ bool IsFileBlacklisted(PCWSTR file, bool is_full_path);
 
 using DetectionArg = std::variant<std::monostate, std::string, std::wstring, size_t>;
 void ReportDetection(AC_DetectionType type, DetectionArg arg = std::monostate{});
-
-#ifdef _RELEASE
-[[noreturn]]
-#endif
-inline void Unexpected()
-{
-#ifdef _DEBUG
-#ifdef _MSC_VER
-    __debugbreak();
-#else
-    __builtin_debugtrap();
-#endif
-#else
-    terminate();
-#endif
-}
 
 namespace hooks
 {

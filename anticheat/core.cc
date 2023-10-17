@@ -8,9 +8,17 @@
 
 #include "core.hh"
 
+#ifdef AC_DRIVER
+#include "../driver/driver.h"
+#endif
+
 #include <WS2tcpip.h>
 #include <iphlpapi.h>
 #include <SoftPub.h>
+
+#if defined(AC_DRIVER) && !defined(AC_X64)
+#error Driver unsupported on this platform, do not define AC_DRIVER
+#endif
 
 #define DO_ONCE() { static bool once = false; if (once) return Unexpected(); else once = true; }
 
@@ -31,6 +39,11 @@ namespace g
     };
     static PVOID dll_notify_cookie;
     static AC_Client client;
+
+#ifdef AC_DRIVER
+    static Driver driver(L"ACDriver");
+    static SC_HANDLE service_manager;
+#endif
 }
 
 namespace callbacks
@@ -83,6 +96,11 @@ NORETURN INTERNAL void
 ExitWithMessage(PCSTR msg)
 {
     MessageBoxA(nullptr, msg, "Error", MB_OK);
+
+#ifdef AC_DRIVER
+    g::driver.Unload();
+#endif
+
     ExitProcess(EXIT_FAILURE);
 }
 
@@ -149,16 +167,16 @@ AddressToSection(PVOID address, PVOID base)
 
     IMAGE_SECTION_HEADER* ret{};
     WalkSections(nt, [&](IMAGE_SECTION_HEADER* section)
+    {
+        auto start = ( ULONG_PTR )base + section->VirtualAddress;
+        auto end = start + section->SizeOfRawData;
+        if (( ULONG_PTR )address >= start && ( ULONG_PTR )address < end)
         {
-            auto start = ( ULONG_PTR )base + section->VirtualAddress;
-            auto end = start + section->SizeOfRawData;
-            if (( ULONG_PTR )address >= start && ( ULONG_PTR )address < end)
-            {
-                ret = section;
-                return false;
-            }
-            return true;
-        });
+            ret = section;
+            return false;
+        }
+        return true;
+    });
 
     return ret;
 }
@@ -400,10 +418,10 @@ ProtectedModule::ProtectedModule(LDR_DATA_TABLE_ENTRY* ldr_entry)
 
 #ifdef AC_LOG_VERBOSE
     WalkSections(m_nt_headers, [&](IMAGE_SECTION_HEADER* section)
-        {
-            LOG_RAW("\t\t Found section {}", GetSectionName(section));
-            return true;
-        });
+    {
+        LOG_RAW("\t\t Found section {}", GetSectionName(section));
+        return true;
+    });
 #endif
 
     // TODO - section could have been patched earlier
@@ -433,7 +451,7 @@ Section::Scan(BYTE* module_base) const
 
     std::vector<Page> pages{};
 
-    for (ULONG i = 0; i < page_count; i++)
+    for (size_t i = 0; i < page_count; i++)
     {
         const auto offset = ( ULONG )(first_page + (( ULONG64 )i * page_size));
         const auto rel_offset = ( ULONG_PTR )i * page_size;
@@ -1116,7 +1134,7 @@ PerformIntegrityChecks()
 // and meant to be available until the process ends
 // (at which point the OS already does all the necessary cleanup)
 INTERNAL AC_IpAddress*
-AllocIpAddress(AC_IpAddressType type, PCWSTR ip, PCWSTR name)
+NewIpAddress(AC_IpAddressType type, PCWSTR ip, PCWSTR name)
 {
     auto addr = new AC_IpAddress();
 
@@ -1183,7 +1201,7 @@ CollectIpAddresses(std::vector<AC_IpAddress*>& ipv4_vec, std::vector<AC_IpAddres
                 WCHAR buf[INET_ADDRSTRLEN]{};
                 auto addr = ( SOCKADDR_IN* )sockaddr;
                 RtlIpv4AddressToString(&addr->sin_addr, buf);
-                ipv4_vec.push_back(AllocIpAddress(AC_Ipv4, buf, adapter->FriendlyName));
+                ipv4_vec.push_back(NewIpAddress(AC_Ipv4, buf, adapter->FriendlyName));
                 break;
             }
             case AF_INET6:
@@ -1202,7 +1220,7 @@ CollectIpAddresses(std::vector<AC_IpAddress*>& ipv4_vec, std::vector<AC_IpAddres
                 {
                     continue; // special use
                 }
-                ipv6_vec.push_back(AllocIpAddress(AC_Ipv6, str.c_str(), adapter->FriendlyName));
+                ipv6_vec.push_back(NewIpAddress(AC_Ipv6, str.c_str(), adapter->FriendlyName));
                 break;
             }
             default:
@@ -1296,6 +1314,207 @@ EnableMitigationPolicies()
 #endif
 }
 
+#ifdef AC_DRIVER
+
+INTERNAL bool
+IsElevated()
+{
+    bool ret{};
+    HANDLE token{};
+
+    if (OpenProcessToken(NtCurrentProcess(), TOKEN_QUERY, &token))
+    {
+        TOKEN_ELEVATION elevation;
+        ULONG size = sizeof(elevation);
+        if (NT_SUCCESS(NtQueryInformationToken(token, TokenElevation, &elevation, size, &size)))
+            ret = !!elevation.TokenIsElevated;
+    }
+
+    if (token)
+        NtClose(token);
+
+    return ret;
+}
+
+void
+Driver::WaitOnState(ULONG state) const
+{
+    while (1)
+    {
+        auto cur_state = GetState();
+
+        if (cur_state == state || !cur_state /* shouldn't happen, but don't spin forever */)
+            return;
+
+        Sleep(100);
+    }
+}
+
+ULONG
+Driver::GetState() const
+{
+    SERVICE_STATUS status{};
+
+    if (!QueryServiceStatus(m_service, &status))
+        return 0;
+
+    return status.dwCurrentState;
+}
+
+AC_Result
+Driver::Load(const fs::path& driver_path, std::wstring_view display_name, std::wstring_view device)
+{
+    // If we're not elevated, CreateService will fail
+    if (!IsElevated())
+    {
+        LOG_ERROR("Couldn't start driver (process is not elevated)");
+        CloseServiceHandle(g::service_manager);
+        return AC_RFailure;
+    }
+
+    // Already loaded?
+    if (GetState() != SERVICE_STOPPED)
+        return AC_RInvalidCall;
+
+    // Sanity check the path
+    if (!fs::exists(driver_path) || !fs::is_regular_file(driver_path)
+        || !driver_path.has_extension() || driver_path.extension() != ".sys")
+    {
+        LOG_ERROR(L"Driver is not at {}", driver_path.wstring());
+        return AC_RFailure;
+    }
+
+    // TODO - surround driver_path with quotes if path has spaces
+    auto service = CreateService(g::service_manager, m_name.c_str(), display_name.data(), SERVICE_ALL_ACCESS,
+        SERVICE_KERNEL_DRIVER, SERVICE_DEMAND_START, SERVICE_ERROR_IGNORE, driver_path.wstring().c_str(),
+        nullptr, nullptr, nullptr, nullptr, nullptr);
+
+    // Either we newly created it or it's not the first time
+    if (service || GetLastError() == ERROR_SERVICE_EXISTS)
+    {
+        if (service)
+            CloseServiceHandle(service); // ???
+        service = OpenService(g::service_manager, m_name.c_str(), SERVICE_ALL_ACCESS);
+    }
+
+    bool success{};
+    if (service)
+    {
+        if (success = StartService(service, 0, nullptr))
+            LOG_SUCCESS("Started kernel driver");
+        else if (GetLastError() == ERROR_SERVICE_ALREADY_RUNNING)
+            LOG_INFO("Kernel driver is already running");
+        else
+            LogWindowsError("Couldn't start kernel driver");
+
+        m_service = service;
+    }
+
+    WaitOnState(SERVICE_RUNNING);
+
+    if (success)
+    {
+        m_handle = CreateFile(device.data(), GENERIC_ALL,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+        if (m_handle == INVALID_HANDLE_VALUE)
+        {
+            LOG_ERROR("Couldn't open I/O handle to driver");
+            return AC_RFailure;
+        }
+    }
+
+    return AC_RSuccess;
+}
+
+AC_Result
+Driver::Unload()
+{
+    if (GetState() != SERVICE_RUNNING)
+        return AC_RInvalidCall;
+
+    SERVICE_STATUS status;
+    ControlService(m_service, SERVICE_CONTROL_STOP, &status);
+
+    WaitOnState(SERVICE_STOPPED);
+
+    CloseServiceHandle(m_service);
+    NtClose(m_handle);
+
+    // TODO - return something else if driver is already unloaded etc
+    return AC_RSuccess;
+}
+
+AC_API AC_Result
+AC_LoadDriver()
+{
+    // Note: the driver is unsigned which would cause problems in real usage
+
+    if (!g::service_manager)
+        g::service_manager = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+
+    if (!g::service_manager)
+    {
+        LOG_ERROR("Couldn't open service manager");
+        return AC_RFailure;
+    }
+
+    // Do the actual work
+    const auto ret = g::driver.Load(
+        fs::current_path() / "driver.sys",
+        L"Anticheat Driver",
+        L"\\\\?\\GLOBALROOT\\Device\\ACDriver"
+    );
+
+    if (ret != AC_RSuccess)
+        return ret;
+
+    // Send a protect request immediately afterwards to affirm connection
+    // and set our process to be protected.
+    // After this, no other process should be able to make IOCTLs to the driver
+    KProtectRequest request;
+    request.pid = HandleToUlong(NtCurrentProcessId());
+    request.result = 0;
+
+    g::driver.Call(IOCTL_PROTECT_REQUEST, &request);
+
+    if (NT_SUCCESS(request.result))
+        LOG_SUCCESS("Driver successfully received protection request");
+    else
+        LOG_ERROR("Driver did not acknowledge protection request");
+
+    return ret;
+}
+
+AC_API AC_Result
+AC_UnloadDriver()
+{
+    AC_Result ret = AC_RFailure;
+
+    if (g::driver.m_service)
+        ret = g::driver.Unload();
+
+    if (g::service_manager)
+        CloseServiceHandle(g::service_manager);
+
+    return ret;
+}
+
+#endif
+
+VOID NTAPI
+LdrEnumCallback(LDR_DATA_TABLE_ENTRY* module_info, PVOID, BOOLEAN*)
+{
+    VERBOSE(LOG_RAW(
+        L"Name: {} Flags: {:#x} Base: {} Reason: {}",
+        module_info->BaseDllName.Buffer,
+        module_info->Flags,
+        module_info->DllBase,
+        ( ULONG )module_info->LoadReason)
+    );
+    ac_ctrl.AddLoaded(module_info);
+}
+
 INTERNAL void
 EarlyInitialize()
 {
@@ -1364,9 +1583,18 @@ AC_BlacklistModule(const wchar_t* name)
 AC_API AC_Result
 AC_Confirm()
 {
-    // Check that the main thread is still running
     if (!ac_ctrl.m_scanner.IsAlive())
         return AC_RFailure;
+
+#ifdef AC_DRIVER
+    SERVICE_STATUS status;
+    // TODO - wrapper function
+    if (g::driver.m_service && QueryServiceStatus(g::driver.m_service, &status))
+    {
+        if (status.dwCurrentState != SERVICE_RUNNING)
+            return AC_RFailure;
+    }
+#endif
 
     return AC_RSuccess;
 }
@@ -1454,19 +1682,6 @@ AC_Ctrl::AddProtected(std::wstring_view name)
     return AC_RFailure;
 }
 
-VOID NTAPI
-LdrEnumCallback(LDR_DATA_TABLE_ENTRY* module_info, PVOID, BOOLEAN*)
-{
-    VERBOSE(LOG_RAW(
-        L"Name: {} Flags: {:#x} Base: {} Reason: {}",
-        module_info->BaseDllName.Buffer,
-        module_info->Flags,
-        module_info->DllBase,
-        ( ULONG )module_info->LoadReason)
-    );
-    ac_ctrl.AddLoaded(module_info);
-}
-
 AC_API AC_Result
 AC_Initialize()
 {
@@ -1530,6 +1745,10 @@ AC_End()
     {
         ldr_unregister_dll_notification(g::dll_notify_cookie);
     }
+
+#ifdef AC_DRIVER
+    AC_UnloadDriver();
+#endif
 
     hooks::Set(false);
     logger::End();
