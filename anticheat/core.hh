@@ -26,6 +26,7 @@ using namespace std::chrono_literals;
 
 #include "api.h"
 #include "logger.hh"
+#include "../shared/shared.h"
 
 #define MAYBE_UNUSED [[maybe_unused]]
 #define NORETURN [[noreturn]]

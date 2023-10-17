@@ -18,14 +18,7 @@
 #include <string.h>
 #endif
 
-// Compile as a DLL to inject into a game and test with a real cheat
-// #define AC_DLL
-
-// Log as much as possible
-// #define AC_LOG_VERBOSE
-
-// Use alternative thread iteration method
-// #define AC_PSS_THREAD_ITER
+#include "../shared/config.h"
 
 typedef enum _AC_Result
 {
