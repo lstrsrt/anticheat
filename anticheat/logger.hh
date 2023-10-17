@@ -16,10 +16,10 @@
 #define LOG_ERROR(fmt, ...) logger::Add<logger::Level::Error>(fmt, __VA_ARGS__)
 #define LOG_RAW(fmt, ...) logger::Add<logger::Level::Raw>(fmt, __VA_ARGS__)
 #else
-#define LOG_SUCCESS(...) {}
-#define LOG_INFO(...) {}
-#define LOG_ERROR(...) {}
-#define LOG_RAW(...) {}
+#define LOG_SUCCESS(...) EMPTY_STATEMENT
+#define LOG_INFO(...) EMPTY_STATEMENT
+#define LOG_ERROR(...) EMPTY_STATEMENT
+#define LOG_RAW(...) EMPTY_STATEMENT
 #endif
 
 struct AutoCriticalSection

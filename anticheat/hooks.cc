@@ -36,14 +36,13 @@ struct WatchedThread
 namespace g
 {
     extern std::vector<PCWSTR> dll_blacklist;
+    static std::vector<WatchedThread> thread_watchlist;
 }
 
 namespace callbacks
 {
     extern AC_HookCallback on_hook;
 }
-
-static std::vector<WatchedThread> thread_watchlist;
 
 struct HookInternal : AC_Hook
 {
@@ -53,8 +52,8 @@ struct HookInternal : AC_Hook
 INTERNAL inline void
 PlaceThreadOnWatchlist(HANDLE handle, PVOID parameter, ULONG id, ULONG_PTR start_address)
 {
-    if (!RangeContains(thread_watchlist, handle, &WatchedThread::m_handle))
-        thread_watchlist.push_back(WatchedThread(handle, parameter, id, start_address));
+    if (!RangeContains(g::thread_watchlist, handle, &WatchedThread::m_handle))
+        g::thread_watchlist.push_back(WatchedThread(handle, parameter, id, start_address));
 }
 
 //
@@ -332,6 +331,8 @@ namespace hooks
                 if (!QueryMemory(NtCurrentProcess(), ( PVOID )address, MemoryBasicInformation, &mem_info))
                     return true;
 
+#define PAGE_EXECUTE_MASK (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)
+
                 if (mem_info.Protect & PAGE_EXECUTE_MASK)
                 {
                     auto original_mod = AddressToModule(start_address);
@@ -352,8 +353,8 @@ namespace hooks
             if (!thread_handle || !context)
                 return original(thread_handle, context);
 
-            const auto thread = rg::find(thread_watchlist, thread_handle, &WatchedThread::m_handle);
-            if (thread == thread_watchlist.cend())
+            const auto thread = rg::find(g::thread_watchlist, thread_handle, &WatchedThread::m_handle);
+            if (thread == g::thread_watchlist.cend())
                 return original(thread_handle, context);
 
             //
@@ -529,8 +530,8 @@ namespace hooks
         SetFunctionDetour(nt_set_context_thread::Hook, &nt_set_context_thread::original, enable);
         SetFunctionDetour(nt_create_section::Hook, &nt_create_section::original, enable);
         SetFunctionDetour(nt_map_view_of_section::Hook, &nt_map_view_of_section::original, enable);
-        if (FindFunction("kernel32", "BaseThreadInitThunk", base_thread_init_thunk::original))
-            SetFunctionDetour(base_thread_init_thunk::Hook, &base_thread_init_thunk::original, enable);
+        //if (FindFunction("kernel32", "BaseThreadInitThunk", base_thread_init_thunk::original))
+        //    SetFunctionDetour(base_thread_init_thunk::Hook, &base_thread_init_thunk::original, enable);
     }
 
 }

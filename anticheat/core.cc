@@ -1441,7 +1441,6 @@ Driver::Unload()
     CloseServiceHandle(m_service);
     NtClose(m_handle);
 
-    // TODO - return something else if driver is already unloaded etc
     return AC_RSuccess;
 }
 
@@ -1587,13 +1586,8 @@ AC_Confirm()
         return AC_RFailure;
 
 #ifdef AC_DRIVER
-    SERVICE_STATUS status;
-    // TODO - wrapper function
-    if (g::driver.m_service && QueryServiceStatus(g::driver.m_service, &status))
-    {
-        if (status.dwCurrentState != SERVICE_RUNNING)
-            return AC_RFailure;
-    }
+    if (g::driver.GetState() != SERVICE_RUNNING)
+        return AC_RFailure;
 #endif
 
     return AC_RSuccess;
