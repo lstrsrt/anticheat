@@ -138,7 +138,7 @@ DispatchIoctl(PDEVICE_OBJECT device, PIRP irp)
     ULONG_PTR io_size = 0;
 
     // Block other processes from sending IOCTLs after target process has been initialized
-    if (IoGetRequestorProcess(irp) != g_target)
+    if (g_target && IoGetRequestorProcess(irp) != g_target)
         return FinalizeIrp(irp, io_size);
 
     PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(irp);
