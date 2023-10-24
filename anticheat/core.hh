@@ -48,6 +48,9 @@ inline void Unexpected()
 
 using Hash32 = AC_Hash32;
 
+template<class T, class... Ts>
+concept IsOneOf = (std::same_as<T, Ts> || ...);
+
 template<class T>
 concept StringLike = requires(T t)
 {
@@ -513,7 +516,6 @@ struct Driver
     explicit Driver(std::wstring_view name)
         : m_name(name)
     {
-
     }
 
     AC_Result Load(const fs::path& driver_path, std::wstring_view display_name, std::wstring_view device);

@@ -104,7 +104,7 @@ ExitWithMessage(PCSTR msg)
     ExitProcess(EXIT_FAILURE);
 }
 
-template<std::integral C = char>
+template<class C = char> requires IsOneOf<C, char, wchar_t>
 INTERNAL C*
 NewHeapString(const C* src, size_t length)
 {
@@ -1343,7 +1343,7 @@ Driver::WaitOnState(ULONG state) const
     {
         auto cur_state = GetState();
 
-        if (cur_state == state || !cur_state /* shouldn't happen, but don't spin forever */)
+        if (cur_state == state || !cur_state /* shouldn't happen, but don't wait forever */)
             return;
 
         Sleep(100);
@@ -1364,16 +1364,8 @@ Driver::GetState() const
 AC_Result
 Driver::Load(const fs::path& driver_path, std::wstring_view display_name, std::wstring_view device)
 {
-    // If we're not elevated, CreateService will fail
-    if (!IsElevated())
-    {
-        LOG_ERROR("Couldn't start driver (process is not elevated)");
-        CloseServiceHandle(g::service_manager);
-        return AC_RFailure;
-    }
-
     // Already loaded?
-    if (GetState() != SERVICE_STOPPED)
+    if (auto state = GetState(); state && state != SERVICE_STOPPED)
         return AC_RInvalidCall;
 
     // Sanity check the path
@@ -1392,9 +1384,8 @@ Driver::Load(const fs::path& driver_path, std::wstring_view display_name, std::w
     // Either we newly created it or it's not the first time
     if (service || GetLastError() == ERROR_SERVICE_EXISTS)
     {
-        if (service)
-            CloseServiceHandle(service); // ???
-        service = OpenService(g::service_manager, m_name.c_str(), SERVICE_ALL_ACCESS);
+        if (!service) // On first time we have a handle, otherwise open a new one
+            service = OpenService(g::service_manager, m_name.c_str(), SERVICE_ALL_ACCESS);
     }
 
     bool success{};
@@ -1433,13 +1424,14 @@ Driver::Unload()
     if (GetState() != SERVICE_RUNNING)
         return AC_RInvalidCall;
 
+    NtClose(m_handle);
+
     SERVICE_STATUS status;
     ControlService(m_service, SERVICE_CONTROL_STOP, &status);
 
     WaitOnState(SERVICE_STOPPED);
 
     CloseServiceHandle(m_service);
-    NtClose(m_handle);
 
     return AC_RSuccess;
 }
@@ -1447,7 +1439,12 @@ Driver::Unload()
 AC_API AC_Result
 AC_LoadDriver()
 {
-    // Note: the driver is unsigned which would cause problems in real usage
+    // If we're not elevated, OpenSCManager will fail
+    if (!IsElevated())
+    {
+        LOG_ERROR("Couldn't start driver (process is not elevated)");
+        return AC_RFailure;
+    }
 
     if (!g::service_manager)
         g::service_manager = OpenSCManager(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
@@ -1459,7 +1456,8 @@ AC_LoadDriver()
     }
 
     // Do the actual work
-    const auto ret = g::driver.Load(
+    // Note: the driver is unsigned which would cause problems in real usage
+    auto ret = g::driver.Load(
         fs::current_path() / "driver.sys",
         L"Anticheat Driver",
         L"\\\\?\\GLOBALROOT\\Device\\ACDriver"
@@ -1471,16 +1469,24 @@ AC_LoadDriver()
     // Send a protect request immediately afterwards to affirm connection
     // and set our process to be protected.
     // After this, no other process should be able to make IOCTLs to the driver
-    KProtectRequest request;
+
+    KProtectRequest request{};
     request.pid = HandleToUlong(NtCurrentProcessId());
-    request.result = 0;
 
-    g::driver.Call(IOCTL_PROTECT_REQUEST, &request);
+    if (g::driver.Call(IOCTL_PROTECT_REQUEST, &request))
+    {
+        ret = NT_SUCCESS(request.result) ? AC_RSuccess : AC_RFailure;
 
-    if (NT_SUCCESS(request.result))
-        LOG_SUCCESS("Driver successfully received protection request");
+        if (ret == AC_RSuccess)
+            LOG_SUCCESS("Driver successfully received protection request");
+        else
+            LOG_ERROR("Driver did not acknowledge protection request");
+    }
     else
-        LOG_ERROR("Driver did not acknowledge protection request");
+    {
+        LOG_ERROR("DeviceIoControl failed on driver (device name correct?)");
+        ret = AC_RFailure;
+    }
 
     return ret;
 }
