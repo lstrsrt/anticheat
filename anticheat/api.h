@@ -107,8 +107,7 @@ typedef void(*AC_DetectionCallback)(AC_DetectionType, const AC_Client*);
 *        the module that called AC_Initialize
 *
 * Returns
-*    AC_RSuccess       - Success.
-*    AC_RInvalidParam1 - Invalid message address.
+*    AC_RSuccess       - Success.
 *    AC_RInvalidCall   - Function was called more than once.
 *    AC_RFailure       - Unspecified failure.
 */
