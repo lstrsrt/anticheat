@@ -184,13 +184,9 @@ AddressToSection(PVOID address, PVOID base)
 std::string
 GetSectionName(IMAGE_SECTION_HEADER* section)
 {
-#ifdef _RELEASE
-    return ""; // Not needed in release
-#else
     char section_name[IMAGE_SIZEOF_SHORT_NAME + 1]{};
     strncpy_s(section_name, ( const char* )(section->Name), IMAGE_SIZEOF_SHORT_NAME);
     return { section_name };
-#endif
 }
 
 bool
